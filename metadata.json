@@ -1,0 +1,7 @@
+{
+  "name": "MCP Screen Reader",
+  "description": "Android Accessibility Service that reads on-screen text, performs automated scrolling, exports structured JSON, and implements the Model Context Protocol (MCP).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

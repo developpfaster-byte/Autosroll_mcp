@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">MCP Screen Reader</string>
+    <string name="accessibility_service_name">MCP Screen Reader Service</string>
+    <string name="accessibility_service_description">Service d\'accessibilité qui lit le contenu textuel et structurel de l\'écran, permet le défilement automatisé, exporte les données en JSON et fournit un serveur Model Context Protocol (MCP) pour les assistants IA.</string>
+</resources>
