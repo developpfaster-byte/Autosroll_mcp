@@ -64,13 +64,74 @@ class FloatingControlService : Service() {
         }
 
         val container = FrameLayout(this)
-        val button = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_search)
-            setBackgroundResource(android.R.drawable.btn_default)
-            contentDescription = "MCP Screen Reader Trigger"
-            setPadding(24, 24, 24, 24)
+        val density = resources.displayMetrics.density
+        fun dpToPx(dp: Int): Int = (dp * density).toInt()
+
+        val rootLayout = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val bgDrawable = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xEE1E293B.toInt()) // Slate-900 with high opacity
+                cornerRadius = dpToPx(28).toFloat()
+                setStroke(dpToPx(2), 0xFF00E5FF.toInt()) // Cyan highlight border
+            }
+            background = bgDrawable
+            setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+            elevation = dpToPx(8).toFloat()
         }
-        container.addView(button)
+
+        // Drag handle / Move indicator
+        val dragHandle = android.widget.ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_sort_by_size)
+            setColorFilter(0xFF94A3B8.toInt())
+            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
+            layoutParams = android.widget.LinearLayout.LayoutParams(dpToPx(32), dpToPx(48))
+            contentDescription = "Déplacer le widget flottant"
+        }
+
+        // Button 1: Quick Read Screen Only (Single pass)
+        val readOnlyButton = android.widget.TextView(this).apply {
+            text = "Lire"
+            textSize = 12f
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = Gravity.CENTER
+            val btnBg = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xFF334155.toInt())
+                cornerRadius = dpToPx(16).toFloat()
+            }
+            background = btnBg
+            setPadding(dpToPx(12), dpToPx(8), dpToPx(12), dpToPx(8))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                dpToPx(40)
+            ).apply {
+                marginEnd = dpToPx(6)
+            }
+        }
+
+        // Button 2: Dedicated SCROLLER & LIRE (Automatic scrolling + Consolidated capture)
+        val scrollAndReadButton = android.widget.TextView(this).apply {
+            text = "▼ Scroller & Lire"
+            textSize = 12f
+            setTextColor(0xFF000000.toInt())
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            val btnBg = android.graphics.drawable.GradientDrawable().apply {
+                setColor(0xFF00E5FF.toInt()) // High contrast Cyan
+                cornerRadius = dpToPx(16).toFloat()
+            }
+            background = btnBg
+            setPadding(dpToPx(14), dpToPx(8), dpToPx(14), dpToPx(8))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                dpToPx(40)
+            )
+        }
+
+        rootLayout.addView(dragHandle)
+        rootLayout.addView(readOnlyButton)
+        rootLayout.addView(scrollAndReadButton)
+        container.addView(rootLayout)
         floatingView = container
 
         var initialX = 0
@@ -79,7 +140,8 @@ class FloatingControlService : Service() {
         var initialTouchY = 0f
         var isMoving = false
 
-        button.setOnTouchListener { _, event ->
+        // Dragging handler on the drag handle
+        dragHandle.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
@@ -92,7 +154,7 @@ class FloatingControlService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - initialTouchX).toInt()
                     val dy = (event.rawY - initialTouchY).toInt()
-                    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
                         isMoving = true
                     }
                     params.x = initialX + dx
@@ -100,14 +162,18 @@ class FloatingControlService : Service() {
                     windowManager?.updateViewLayout(container, params)
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    if (!isMoving) {
-                        triggerQuickRead()
-                    }
-                    true
-                }
                 else -> false
             }
+        }
+
+        // Quick Read listener
+        readOnlyButton.setOnClickListener {
+            triggerQuickRead(maxScrolls = 0)
+        }
+
+        // Scroller & Lire listener (Automated multi-pass scroll & read)
+        scrollAndReadButton.setOnClickListener {
+            triggerQuickRead(maxScrolls = 3)
         }
 
         try {
@@ -117,23 +183,35 @@ class FloatingControlService : Service() {
         }
     }
 
-    private fun triggerQuickRead() {
+    private fun triggerQuickRead(maxScrolls: Int) {
         val accessibilityService = ScreenReaderAccessibilityService.instance
         if (accessibilityService == null) {
-            Toast.makeText(this, "Service d'accessibilité inactif", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Service d'accessibilité inactif. Activez-le dans l'application.", Toast.LENGTH_SHORT).show()
             return
         }
 
         serviceScope.launch {
-            Toast.makeText(this@FloatingControlService, "Lecture et scroll en cours...", Toast.LENGTH_SHORT).show()
-            val dump = accessibilityService.scrollAndRead(maxScrolls = 2, delayMs = 600)
-            val app = application as? ScreenReaderApp
-            app?.repository?.saveCapture(dump)
-            Toast.makeText(
-                this@FloatingControlService,
-                "✓ ${dump.extractedTexts.size} textes capturés en JSON",
-                Toast.LENGTH_LONG
-            ).show()
+            if (maxScrolls > 0) {
+                Toast.makeText(this@FloatingControlService, "Défilement & lecture de l'écran en cours ($maxScrolls passes)...", Toast.LENGTH_SHORT).show()
+                val dump = accessibilityService.scrollAndRead(maxScrolls = maxScrolls, delayMs = 700)
+                val app = application as? ScreenReaderApp
+                app?.repository?.saveCapture(dump)
+                Toast.makeText(
+                    this@FloatingControlService,
+                    "✓ ${dump.extractedTexts.size} textes capturés et enregistrés en JSON !",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                Toast.makeText(this@FloatingControlService, "Lecture de l'écran en cours...", Toast.LENGTH_SHORT).show()
+                val dump = accessibilityService.readCurrentScreen(captureType = "floating_read")
+                val app = application as? ScreenReaderApp
+                app?.repository?.saveCapture(dump)
+                Toast.makeText(
+                    this@FloatingControlService,
+                    "✓ ${dump.extractedTexts.size} textes capturés en JSON",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
     }
 

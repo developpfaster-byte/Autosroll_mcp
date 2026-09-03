@@ -91,7 +91,6 @@ fun HomeScreen(
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
     val currentDump by viewModel.currentDump.collectAsStateWithLifecycle()
 
-    var scrollPasses by remember { mutableFloatStateOf(3f) }
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Textes extraits, 1: Éléments UI, 2: JSON brut
 
     LazyColumn(
@@ -239,94 +238,59 @@ fun HomeScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = "Contrôles de Capture & Défilement",
+                        text = "Contrôles de Capture",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
-                    // Scroll Passes Slider
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Nombre de scrolls (passes)",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "${scrollPasses.toInt()} scrolls",
-                                fontWeight = FontWeight.Bold,
-                                color = PrimaryCyan
-                            )
-                        }
-                        Slider(
-                            value = scrollPasses,
-                            onValueChange = { scrollPasses = it },
-                            valueRange = 1f..8f,
-                            steps = 6,
-                            modifier = Modifier.testTag("scroll_passes_slider")
-                        )
-                    }
-
-                    // Main Action Buttons
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    // Single Pass Read button in app interface
+                    Button(
+                        onClick = { viewModel.triggerReadScreen() },
+                        enabled = isAccessibilityEnabled && !isReading,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("read_screen_button"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = SecondaryIndigo)
                     ) {
-                        Button(
-                            onClick = { viewModel.triggerReadScreen() },
-                            enabled = isAccessibilityEnabled && !isReading,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp)
-                                .testTag("read_screen_button"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = SecondaryIndigo)
-                        ) {
+                        if (isReading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
                             Icon(Icons.Default.Visibility, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("Lire l'écran", fontWeight = FontWeight.SemiBold)
-                        }
-
-                        Button(
-                            onClick = { viewModel.triggerScrollAndRead(scrollCount = scrollPasses.toInt()) },
-                            enabled = isAccessibilityEnabled && !isReading,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp)
-                                .testTag("scroll_and_read_button"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryCyan)
-                        ) {
-                            if (isReading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    color = Color.Black,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(Icons.Default.ArrowDownward, contentDescription = null, tint = Color.Black)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Scroller & Lire", fontWeight = FontWeight.Bold, color = Color.Black)
-                            }
+                            Text("Lire l'écran actuel", fontWeight = FontWeight.SemiBold)
                         }
                     }
 
-                    // Floating Overlay button
-                    OutlinedButton(
+                    // Floating Overlay button (where Scroller & Lire is located)
+                    Button(
                         onClick = { viewModel.toggleFloatingService(context) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp)
+                            .height(52.dp)
                             .testTag("floating_button_toggle"),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryCyan)
                     ) {
-                        Icon(Icons.Default.TouchApp, contentDescription = null)
+                        Icon(Icons.Default.TouchApp, contentDescription = null, tint = Color.Black)
                         Spacer(Modifier.width(8.dp))
-                        Text("Activer Bouton Flottant (Overlay sur d'autres apps)")
+                        Text(
+                            "Activer Bouton Flottant (Scroller & Lire)",
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Black
+                        )
                     }
+
+                    Text(
+                        text = "💡 Le bouton « Scroller & Lire » est accessible directement dans le widget flottant pour faire défiler et capturer vos autres applications (WhatsApp, Chrome, Twitter, etc.).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
