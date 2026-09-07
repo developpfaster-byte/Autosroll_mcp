@@ -10,19 +10,24 @@ import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ScreenReaderApp
+import com.example.data.db.ConversationBranchEntity
+import com.example.data.db.ConversationTurnEntity
 import com.example.data.db.ScreenCaptureEntity
 import com.example.data.model.McpLogEntry
 import com.example.data.model.ScreenDump
 import com.example.mcp.McpServerState
 import com.example.service.FloatingControlService
 import com.example.service.ScreenReaderAccessibilityService
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ScreenReaderViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as ScreenReaderApp
@@ -33,6 +38,15 @@ class ScreenReaderViewModel(application: Application) : AndroidViewModel(applica
     val isFloatingOverlayVisible: StateFlow<Boolean> = ScreenReaderAccessibilityService.isFloatingOverlayVisible
 
     val recentCaptures: StateFlow<List<ScreenCaptureEntity>> = repository.allCaptures
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allBranches: StateFlow<List<ConversationBranchEntity>> = repository.allBranches
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeBranchName: StateFlow<String> = repository.activeBranch
+
+    val activeBranchTurns: StateFlow<List<ConversationTurnEntity>> = repository.activeBranch
+        .flatMapLatest { branch -> repository.getTurnsForBranch(branch) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val mcpServerState: StateFlow<McpServerState> = mcpEngine.serverState
@@ -108,6 +122,69 @@ class ScreenReaderViewModel(application: Application) : AndroidViewModel(applica
                 _isReading.value = false
             }
         }
+    }
+
+    fun triggerScrollAndStitchTurn(maxScrolls: Int = 80, delayMs: Long = 750, role: String = "auto") {
+        val service = ScreenReaderAccessibilityService.instance
+        if (service == null) {
+            _statusMessage.value = "Le service d'accessibilité n'est pas activé."
+            return
+        }
+
+        viewModelScope.launch {
+            _isReading.value = true
+            _statusMessage.value = "Défilement dynamique avec détection automatique de la fin du message..."
+            try {
+                val currentBranch = repository.activeBranch.value
+                val result = service.scrollAndStitchConversationTurn(
+                    maxScrolls = maxScrolls,
+                    delayMs = delayMs,
+                    branchName = currentBranch,
+                    role = role,
+                    onProgress = { current, words, statusMsg ->
+                        _statusMessage.value = "Page $current ($words mots) • $statusMsg"
+                    }
+                )
+                val turn = result.second
+                _currentDump.value = result.first
+                val continuity = if (turn?.parentTurnId != null) "Suite du Tour #${turn.turnIndex - 1}" else "Tour #${turn?.turnIndex ?: 1}"
+                _statusMessage.value = "✓ $continuity cousu avec succès (${turn?.wordCount ?: 0} mots, ${turn?.scrollPassCount}p, fin détectée) dans 🌿 $currentBranch !"
+            } catch (e: Exception) {
+                _statusMessage.value = "Erreur lors de la couture : ${e.message}"
+            } finally {
+                _isReading.value = false
+            }
+        }
+    }
+
+    fun switchBranch(name: String) {
+        repository.setActiveBranch(name)
+        _statusMessage.value = "Branche active : 🌿 $name"
+    }
+
+    fun createBranch(name: String, appName: String = "Application") {
+        viewModelScope.launch {
+            val branch = repository.createBranch(name, appName)
+            repository.setActiveBranch(branch.branchName)
+            _statusMessage.value = "✓ Nouvelle branche créée : 🌿 ${branch.branchName}"
+        }
+    }
+
+    fun deleteBranch(name: String) {
+        viewModelScope.launch {
+            repository.deleteBranch(name)
+            _statusMessage.value = "Branche '$name' supprimée"
+        }
+    }
+
+    fun deleteTurn(id: Long) {
+        viewModelScope.launch {
+            repository.deleteTurn(id)
+        }
+    }
+
+    suspend fun exportBranchMarkdown(branchName: String): String {
+        return repository.exportBranchMarkdown(branchName)
     }
 
     fun executeJsonRpcTest() {

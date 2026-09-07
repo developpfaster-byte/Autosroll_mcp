@@ -5,9 +5,18 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [ScreenCaptureEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [
+        ScreenCaptureEntity::class,
+        ConversationBranchEntity::class,
+        ConversationTurnEntity::class
+    ],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun screenCaptureDao(): ScreenCaptureDao
+    abstract fun conversationDao(): ConversationDao
 
     companion object {
         @Volatile

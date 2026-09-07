@@ -24,7 +24,10 @@ class ScreenReaderApp : Application() {
         super.onCreate()
         instance = this
         database = AppDatabase.getDatabase(this)
-        repository = ScreenCaptureRepository(database.screenCaptureDao())
+        repository = ScreenCaptureRepository(
+            dao = database.screenCaptureDao(),
+            conversationDao = database.conversationDao()
+        )
         toolsHandler = McpToolsHandler(repository)
         mcpEngine = McpServerEngine(this, toolsHandler)
         

@@ -34,15 +34,45 @@ class McpToolsHandler(
             ),
             McpToolDefinition(
                 name = "scroll_and_read",
-                description = "Fait défiler l'écran (scroll) vers le bas plusieurs fois, lit et extrait tous les textes découverts, puis retourne un JSON complet consolidé.",
+                description = "Fait défiler l'écran vers le bas avec détection automatique et dynamique de la fin du message (s'arrête dès la fin réelle sans compteur fixe), coud le texte sans répéter les phrases chevauchantes, détecte le début et la fin, préserve la continuité de la conversation (suite du tour précédent) et enregistre le tour dans une branche (style Git).",
                 inputSchema = JSONObject()
                     .put("type", "object")
                     .put(
                         "properties",
                         JSONObject()
-                            .put("scroll_count", JSONObject().put("type", "integer").put("description", "Nombre de scrolls à réaliser (1 à 10)").put("default", 3))
-                            .put("delay_ms", JSONObject().put("type", "integer").put("description", "Délai en ms entre chaque scroll").put("default", 800))
+                            .put("scroll_count", JSONObject().put("type", "integer").put("description", "Plafond maximal de défilement de sécurité (s'arrête dès que la fin est détectée, défaut: 60)").put("default", 60))
+                            .put("delay_ms", JSONObject().put("type", "integer").put("description", "Délai en ms entre chaque scroll").put("default", 750))
+                            .put("branch_name", JSONObject().put("type", "string").put("description", "Branche de conversation cible (défaut: active)"))
+                            .put("auto_stitch", JSONObject().put("type", "boolean").put("description", "Coudre le texte sans doublons, détecter la fin et enregistrer comme commit dans la branche (défaut: true)").put("default", true))
                     )
+            ),
+            McpToolDefinition(
+                name = "manage_conversation_branch",
+                description = "Gère l'arborescence des branches de conversation (comme GitHub) pour organiser les questions/réponses sans mélanger les contextes.",
+                inputSchema = JSONObject()
+                    .put("type", "object")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("action", JSONObject().put("type", "string").put("enum", JSONArray(listOf("list_branches", "create_branch", "switch_branch", "get_branch_history", "export_markdown"))).put("description", "Action à exécuter"))
+                            .put("branch_name", JSONObject().put("type", "string").put("description", "Nom de la branche concernée"))
+                    )
+                    .put("required", JSONArray(listOf("action")))
+            ),
+            McpToolDefinition(
+                name = "append_conversation_turn",
+                description = "Ajoute explicitement un nouveau message/tour cousu dans une branche avec ses marqueurs de début et de fin.",
+                inputSchema = JSONObject()
+                    .put("type", "object")
+                    .put(
+                        "properties",
+                        JSONObject()
+                            .put("branch_name", JSONObject().put("type", "string").put("description", "Nom de la branche (défaut: active)"))
+                            .put("text", JSONObject().put("type", "string").put("description", "Texte intégral du message/réponse"))
+                            .put("role", JSONObject().put("type", "string").put("enum", JSONArray(listOf("user", "assistant"))).put("default", "assistant"))
+                            .put("scroll_passes", JSONObject().put("type", "integer").put("default", 1))
+                    )
+                    .put("required", JSONArray(listOf("text")))
             ),
             McpToolDefinition(
                 name = "scroll_screen",
@@ -105,6 +135,16 @@ class McpToolsHandler(
                 uri = "screen://history",
                 name = "Screen Capture History",
                 description = "Historique des captures d'écran et des fichiers JSON enregistrés"
+            ),
+            McpResourceDefinition(
+                uri = "conversation://branches",
+                name = "Conversation Branches (Git Tree)",
+                description = "Liste de toutes les branches de discussion enregistrées"
+            ),
+            McpResourceDefinition(
+                uri = "conversation://current",
+                name = "Active Branch Turns & Commits",
+                description = "Historique des questions/réponses cousues de la branche courante"
             )
         )
     }
@@ -221,17 +261,144 @@ class McpToolsHandler(
                 if (service == null) {
                     return formatMcpToolError("Le service d'accessibilité n'est pas activé dans les paramètres Android.", requestId)
                 }
-                val scrollCount = args.optInt("scroll_count", 3).coerceIn(1, 10)
-                val delayMs = args.optLong("delay_ms", 800).coerceIn(300, 3000)
+                val scrollCount = args.optInt("scroll_count", 60).coerceIn(1, 100)
+                val delayMs = args.optLong("delay_ms", 750).coerceIn(300, 3000)
+                val branchName = args.optString("branch_name", repository.activeBranch.value)
+                val autoStitch = args.optBoolean("auto_stitch", true)
 
-                val dump = withContext(Dispatchers.Main) {
-                    service.scrollAndRead(maxScrolls = scrollCount, delayMs = delayMs)
+                if (autoStitch) {
+                    val result = withContext(Dispatchers.Main) {
+                        service.scrollAndStitchConversationTurn(
+                            maxScrolls = scrollCount,
+                            delayMs = delayMs,
+                            branchName = branchName,
+                            role = "auto"
+                        )
+                    }
+                    val dump = result.first
+                    val turn = result.second
+
+                    val continuityLabel = if (turn?.parentTurnId != null) "Suite du Tour #${turn.turnIndex - 1}" else "Début de la conversation (Tour #1)"
+
+                    val jsonPayload = JSONObject()
+                        .put("branch", turn?.branchName ?: branchName)
+                        .put("turnIndex", turn?.turnIndex ?: 1)
+                        .put("turnCommitId", turn?.turnId ?: "")
+                        .put("parentTurnId", turn?.parentTurnId ?: JSONObject.NULL)
+                        .put("continuity", continuityLabel)
+                        .put("role", turn?.role ?: "assistant")
+                        .put("scrollPassCount", dump.scrollPasses)
+                        .put("wordCount", turn?.wordCount ?: 0)
+                        .put("charCount", turn?.charCount ?: 0)
+                        .put("startMarker", turn?.startSnippet ?: "")
+                        .put("endMarker", turn?.endSnippet ?: "")
+                        .put("stitchedText", turn?.stitchedText ?: "")
+
+                    return formatMcpToolSuccess(
+                        textContent = "✓ Défilement et couture terminés ($continuityLabel).\nFin de page détectée automatiquement après ${dump.scrollPasses} passes (${turn?.wordCount ?: 0} mots).\nBranche: 🌿 ${turn?.branchName ?: branchName}\nTour #${turn?.turnIndex} [${turn?.shortTurnId}]\n🟢 Commence ici: ${turn?.startSnippet}\n🔴 Se termine ici: ${turn?.endSnippet}",
+                        jsonPayload = jsonPayload,
+                        requestId = requestId
+                    )
+                } else {
+                    val dump = withContext(Dispatchers.Main) {
+                        service.scrollAndRead(maxScrolls = scrollCount, delayMs = delayMs)
+                    }
+                    repository.saveCapture(dump)
+
+                    return formatMcpToolSuccess(
+                        textContent = "Défilement et lecture terminés (${dump.scrollPasses} passes).\nTextes uniques découverts: ${dump.extractedTexts.size}\nApplication: ${dump.appName}",
+                        jsonPayload = dump.toJson(),
+                        requestId = requestId
+                    )
                 }
-                repository.saveCapture(dump)
+            }
+
+            "manage_conversation_branch" -> {
+                val action = args.optString("action", "list_branches")
+                val branchName = args.optString("branch_name", repository.activeBranch.value)
+
+                when (action) {
+                    "create_branch" -> {
+                        val b = repository.createBranch(branchName)
+                        repository.setActiveBranch(b.branchName)
+                        return formatMcpToolSuccess(
+                            textContent = "Branche '${b.branchName}' créée et activée.",
+                            jsonPayload = JSONObject().put("branch", b.branchName).put("status", "created"),
+                            requestId = requestId
+                        )
+                    }
+                    "switch_branch" -> {
+                        repository.setActiveBranch(branchName)
+                        return formatMcpToolSuccess(
+                            textContent = "Branche active basculée sur '$branchName'.",
+                            jsonPayload = JSONObject().put("branch", branchName).put("status", "switched"),
+                            requestId = requestId
+                        )
+                    }
+                    "get_branch_history" -> {
+                        val turns = repository.getBranchTurnsList(branchName)
+                        val turnsArray = JSONArray()
+                        turns.forEach { turn ->
+                            turnsArray.put(
+                                JSONObject()
+                                    .put("turnId", turn.turnId)
+                                    .put("turnIndex", turn.turnIndex)
+                                    .put("parentTurnId", turn.parentTurnId ?: JSONObject.NULL)
+                                    .put("role", turn.role)
+                                    .put("startMarker", turn.startSnippet)
+                                    .put("endMarker", turn.endSnippet)
+                                    .put("scrollPassCount", turn.scrollPassCount)
+                                    .put("wordCount", turn.wordCount)
+                                    .put("text", turn.stitchedText)
+                            )
+                        }
+                        return formatMcpToolSuccess(
+                            textContent = "Historique de la branche '$branchName' (${turns.size} tours)",
+                            jsonPayload = JSONObject().put("branch", branchName).put("turns", turnsArray),
+                            requestId = requestId
+                        )
+                    }
+                    "export_markdown" -> {
+                        val md = repository.exportBranchMarkdown(branchName)
+                        return formatMcpToolSuccess(
+                            textContent = md,
+                            jsonPayload = JSONObject().put("branch", branchName).put("markdown", md),
+                            requestId = requestId
+                        )
+                    }
+                    else -> {
+                        return formatMcpToolSuccess(
+                            textContent = "Branche active actuelle : ${repository.activeBranch.value}",
+                            jsonPayload = JSONObject().put("activeBranch", repository.activeBranch.value),
+                            requestId = requestId
+                        )
+                    }
+                }
+            }
+
+            "append_conversation_turn" -> {
+                val text = args.optString("text")
+                if (text.isBlank()) {
+                    return formatMcpToolError("Le paramètre 'text' est requis.", requestId)
+                }
+                val branchName = args.optString("branch_name", repository.activeBranch.value)
+                val role = args.optString("role", "assistant")
+                val passes = args.optInt("scroll_passes", 1)
+
+                val stitched = com.example.data.engine.TextStitcherEngine.stitchScrollPasses(listOf(listOf(text)))
+                val turn = repository.appendTurnToBranch(
+                    branchName = branchName,
+                    stitchedResult = stitched,
+                    role = role,
+                    scrollPassCount = passes
+                )
 
                 return formatMcpToolSuccess(
-                    textContent = "Défilement et lecture terminés (${dump.scrollPasses} passes).\nTextes uniques découverts: ${dump.extractedTexts.size}\nApplication: ${dump.appName}",
-                    jsonPayload = dump.toJson(),
+                    textContent = "✓ Tour #${turn?.turnIndex} ajouté à la branche 🌿 $branchName [${turn?.shortTurnId}]",
+                    jsonPayload = JSONObject()
+                        .put("turnId", turn?.turnId)
+                        .put("turnIndex", turn?.turnIndex)
+                        .put("branch", branchName),
                     requestId = requestId
                 )
             }
@@ -339,6 +506,47 @@ class McpToolsHandler(
                             .put("uri", uri)
                             .put("mimeType", "application/json")
                             .put("text", latest?.jsonPayload ?: "[]")
+                    )
+                )
+                return McpResponse(id = requestId, result = result)
+            }
+            uri == "conversation://branches" -> {
+                val active = repository.activeBranch.value
+                val result = JSONObject().put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("uri", uri)
+                            .put("mimeType", "application/json")
+                            .put("text", JSONObject().put("activeBranch", active).toString(2))
+                    )
+                )
+                return McpResponse(id = requestId, result = result)
+            }
+            uri == "conversation://current" -> {
+                val active = repository.activeBranch.value
+                val turns = repository.getBranchTurnsList(active)
+                val arr = JSONArray()
+                turns.forEach { turn ->
+                    arr.put(
+                        JSONObject()
+                            .put("turnId", turn.turnId)
+                            .put("turnIndex", turn.turnIndex)
+                            .put("role", turn.role)
+                            .put("startMarker", turn.startSnippet)
+                            .put("endMarker", turn.endSnippet)
+                            .put("wordCount", turn.wordCount)
+                            .put("scrollPasses", turn.scrollPassCount)
+                            .put("text", turn.stitchedText)
+                    )
+                }
+                val result = JSONObject().put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("uri", uri)
+                            .put("mimeType", "application/json")
+                            .put("text", JSONObject().put("branch", active).put("turns", arr).toString(2))
                     )
                 )
                 return McpResponse(id = requestId, result = result)

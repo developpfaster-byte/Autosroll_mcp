@@ -26,6 +26,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import com.example.ScreenReaderApp
+import com.example.data.db.ConversationTurnEntity
+import com.example.data.engine.StitchedResult
+import com.example.data.engine.TextStitcherEngine
 import com.example.data.model.InteractiveElement
 import com.example.data.model.NodeBounds
 import com.example.data.model.ScreenDump
@@ -242,6 +245,119 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Continuous multi-pass scrolling that dynamically detects the true end of the page/response
+     * (rather than relying on a hardcoded count), stitches text without duplicating overlapping phrases,
+     * slices off content from previous turns to maintain conversation continuity, and commits the turn to the branch.
+     */
+    suspend fun scrollAndStitchConversationTurn(
+        maxScrolls: Int = 80, // Safe ceiling; stops dynamically as soon as page end is reached
+        delayMs: Long = 750,
+        branchName: String = "",
+        role: String = "auto",
+        onProgress: ((currentPass: Int, wordCount: Int, statusMessage: String) -> Unit)? = null
+    ): Pair<ScreenDump, ConversationTurnEntity?> {
+        val app = application as? ScreenReaderApp
+        val targetBranch = branchName.ifBlank { app?.repository?.activeBranch?.value ?: "main" }
+
+        // 1. Retrieve the previous turn to preserve continuity ("suite de la conversation")
+        val previousTurn = app?.repository?.getLastTurnForBranch(targetBranch)
+        val previousEndAnchor = previousTurn?.endSnippet
+
+        val passes = mutableListOf<List<String>>()
+
+        // 2. Initial capture pass
+        val initialDump = readCurrentScreen("conversation_turn")
+        passes.add(initialDump.extractedTexts)
+        var lastCaptured = initialDump
+        var completedPasses = 1
+
+        // 3. Initial stitch with previous turn anchor slicing
+        var currentStitched = TextStitcherEngine.stitchScrollPasses(
+            passes = passes,
+            previousTurnEndAnchor = previousEndAnchor
+        )
+
+        val initStatus = if (previousTurn != null) {
+            "Suite du Tour #${previousTurn.turnIndex} (Début détecté)"
+        } else {
+            "Début de conversation détecté"
+        }
+        onProgress?.invoke(1, currentStitched.wordCount, initStatus)
+
+        var stagnantCount = 0
+        var terminationReason = "Fin de page détectée automatiquement"
+
+        // 4. Dynamic scroll loop until true end of content is reached
+        for (i in 1..maxScrolls) {
+            delay(200)
+            val scrolled = scrollDown()
+            delay(delayMs)
+
+            val passDump = readCurrentScreen("conversation_turn")
+            val newUnique = passDump.extractedTexts.filterNot { currentStitched.stitchedLines.contains(it) }
+
+            if (newUnique.isEmpty()) {
+                stagnantCount++
+            } else {
+                stagnantCount = 0
+            }
+
+            // Dynamically check if true end of page/response is reached
+            val (isEnd, reason) = TextStitcherEngine.isEndOfPageReached(
+                scrolledSuccessfully = scrolled,
+                newUniqueCount = newUnique.size,
+                stagnantCount = stagnantCount,
+                screenTexts = passDump.extractedTexts
+            )
+
+            if (newUnique.isNotEmpty()) {
+                passes.add(passDump.extractedTexts)
+                currentStitched = TextStitcherEngine.stitchScrollPasses(
+                    passes = passes,
+                    previousTurnEndAnchor = previousEndAnchor
+                )
+                lastCaptured = passDump
+                completedPasses++
+            }
+
+            if (isEnd) {
+                terminationReason = reason
+                onProgress?.invoke(completedPasses, currentStitched.wordCount, "✓ $reason")
+                break
+            } else {
+                onProgress?.invoke(completedPasses, currentStitched.wordCount, "Page $completedPasses ($stagnantCount statique)")
+            }
+        }
+
+        val inferredRole = if (role == "auto") {
+            TextStitcherEngine.inferRole(currentStitched.fullText, currentStitched.stitchedLines.size)
+        } else {
+            role
+        }
+
+        val finalStitched = currentStitched.copy(endReason = terminationReason)
+
+        val turnEntity = app?.repository?.appendTurnToBranch(
+            branchName = targetBranch,
+            stitchedResult = finalStitched,
+            role = inferredRole,
+            scrollPassCount = completedPasses,
+            appName = lastCaptured.appName,
+            appPackage = lastCaptured.packageName
+        )
+
+        val dumpResult = lastCaptured.copy(
+            scrollPasses = completedPasses,
+            extractedTexts = finalStitched.stitchedLines,
+            captureType = "conversation_turn"
+        )
+        app?.repository?.saveCapture(dumpResult)
+        _lastCapturedDump.value = dumpResult
+
+        return Pair(dumpResult, turnEntity)
+    }
+
+    /**
      * Scrolls down using accessibility action or gesture.
      */
     suspend fun scrollDown(): Boolean {
@@ -388,9 +504,31 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
                 contentDescription = "Déplacer le widget"
             }
 
+            // Branch indicator badge
+            val app = application as? ScreenReaderApp
+            val activeBranch = app?.repository?.activeBranch?.value ?: "main"
+            val branchBadge = TextView(this).apply {
+                text = "🌿 $activeBranch"
+                textSize = 10f
+                setTextColor(0xFF38BDF8.toInt())
+                gravity = Gravity.CENTER
+                val b = GradientDrawable().apply {
+                    setColor(0x330284C7.toInt())
+                    cornerRadius = dpToPx(10).toFloat()
+                }
+                background = b
+                setPadding(dpToPx(6), dpToPx(3), dpToPx(6), dpToPx(3))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    dpToPx(28)
+                ).apply {
+                    marginEnd = dpToPx(4)
+                }
+            }
+
             // Single Read Button
             val readBtn = TextView(this).apply {
-                text = "👁 Lire"
+                text = "👁"
                 textSize = 12f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
@@ -399,18 +537,40 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
                     cornerRadius = dpToPx(14).toFloat()
                 }
                 background = b
-                setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
+                setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     dpToPx(36)
                 ).apply {
-                    marginEnd = dpToPx(6)
+                    marginEnd = dpToPx(4)
                 }
+                contentDescription = "Lire l'écran visible"
             }
 
-            // Main SCROLLER & LIRE Button
+            // New Turn Marker Button
+            val newTurnBtn = TextView(this).apply {
+                text = "+ Tour"
+                textSize = 11f
+                setTextColor(0xFFF8FAFC.toInt())
+                gravity = Gravity.CENTER
+                val b = GradientDrawable().apply {
+                    setColor(0xFF334155.toInt())
+                    cornerRadius = dpToPx(14).toFloat()
+                }
+                background = b
+                setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    dpToPx(36)
+                ).apply {
+                    marginEnd = dpToPx(4)
+                }
+                contentDescription = "Marquer le début d'une nouvelle question/réponse"
+            }
+
+            // Main SCROLLER & COUDRE Button (Dynamic page-end detection)
             val scrollReadBtn = TextView(this).apply {
-                text = "▼ Scroller & Lire"
+                text = "▼ Défilement Auto-Fin"
                 textSize = 12f
                 setTextColor(Color.BLACK)
                 typeface = Typeface.DEFAULT_BOLD
@@ -420,11 +580,12 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
                     cornerRadius = dpToPx(14).toFloat()
                 }
                 background = b
-                setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
+                setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     dpToPx(36)
                 )
+                contentDescription = "Défilement continu avec détection automatique de la fin du message et couture sans doublon"
             }
 
             // Close Button (✕)
@@ -441,7 +602,9 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
             }
 
             pill.addView(dragHandle)
+            pill.addView(branchBadge)
             pill.addView(readBtn)
+            pill.addView(newTurnBtn)
             pill.addView(scrollReadBtn)
             pill.addView(closeBtn)
             container.addView(pill)
@@ -480,67 +643,81 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
                 if (isScrollActionRunning) return@setOnClickListener
                 serviceScope.launch {
                     try {
-                        readBtn.text = "⏳ ..."
+                        readBtn.text = "⏳"
                         val dump = readCurrentScreen("floating_read")
-                        val app = application as? ScreenReaderApp
                         app?.repository?.saveCapture(dump)
                         Toast.makeText(
                             this@ScreenReaderAccessibilityService,
-                            "✓ ${dump.extractedTexts.size} textes capturés en JSON (${dump.appName})",
+                            "✓ ${dump.extractedTexts.size} textes capturés (${dump.appName})",
                             Toast.LENGTH_SHORT
                         ).show()
-                        readBtn.text = "✓ OK"
-                        delay(1500)
-                        readBtn.text = "👁 Lire"
+                        readBtn.text = "✓"
+                        delay(1200)
+                        readBtn.text = "👁"
                     } catch (e: Exception) {
                         Log.e(TAG, "Error in floating read", e)
-                        readBtn.text = "👁 Lire"
+                        readBtn.text = "👁"
                     }
                 }
             }
 
-            // Click: Scroller & Lire (Continuer de scroller & extraire)
+            // Click: New Turn Marker
+            newTurnBtn.setOnClickListener {
+                Toast.makeText(
+                    this@ScreenReaderAccessibilityService,
+                    "🌿 Prêt pour une nouvelle question/réponse. Les prochains défilements créeront un nouveau tour.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+
+            // Click: Scroller & Coudre (Dynamic detection of end of page)
             scrollReadBtn.setOnClickListener {
                 if (isScrollActionRunning) return@setOnClickListener
                 isScrollActionRunning = true
 
                 serviceScope.launch {
                     try {
-                        scrollReadBtn.text = "⏳ Scroll..."
+                        scrollReadBtn.text = "Détection..."
+                        val currentBranch = app?.repository?.activeBranch?.value ?: "main"
+                        branchBadge.text = "🌿 $currentBranch"
+
                         Toast.makeText(
                             this@ScreenReaderAccessibilityService,
-                            "Défilement & capture automatique en cours...",
+                            "Défilement dynamique : recherche de la fin du message et couture sans doublons...",
                             Toast.LENGTH_SHORT
                         ).show()
 
-                        val dump = scrollAndRead(
-                            maxScrolls = 3,
+                        val result = scrollAndStitchConversationTurn(
+                            maxScrolls = 80,
                             delayMs = 750,
-                            onProgress = { currentPass, maxPass, count ->
-                                scrollReadBtn.text = "Scroll $currentPass/$maxPass ($count)"
+                            branchName = currentBranch,
+                            role = "auto",
+                            onProgress = { currentPass, wordCount, statusMsg ->
+                                scrollReadBtn.text = "P$currentPass ($wordCount m)"
                             }
                         )
 
-                        val app = application as? ScreenReaderApp
-                        app?.repository?.saveCapture(dump)
+                        val turn = result.second
+                        val dump = result.first
 
+                        val continuityText = if (turn?.parentTurnId != null) "Suite T#${turn.turnIndex - 1}" else "T#1"
                         Toast.makeText(
                             this@ScreenReaderAccessibilityService,
-                            "✓ ${dump.extractedTexts.size} textes extraits et enregistrés en JSON !",
+                            "✓ $continuityText cousu : ${turn?.wordCount ?: 0} mots (${dump.scrollPasses}p, fin détectée) dans 🌿 $currentBranch !",
                             Toast.LENGTH_LONG
                         ).show()
 
-                        scrollReadBtn.text = "✓ ${dump.extractedTexts.size} textes"
-                        delay(2500)
-                        scrollReadBtn.text = "▼ Scroller & Lire"
+                        scrollReadBtn.text = "✓ T#${turn?.turnIndex} (${turn?.wordCount}m)"
+                        delay(2800)
+                        scrollReadBtn.text = "▼ Défilement Auto-Fin"
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error during scroll and read from overlay", e)
+                        Log.e(TAG, "Error during scroll and stitch from overlay", e)
                         Toast.makeText(
                             this@ScreenReaderAccessibilityService,
                             "Erreur lors du défilement: ${e.message}",
                             Toast.LENGTH_SHORT
                         ).show()
-                        scrollReadBtn.text = "▼ Scroller & Lire"
+                        scrollReadBtn.text = "▼ Défilement Auto-Fin"
                     } finally {
                         isScrollActionRunning = false
                     }

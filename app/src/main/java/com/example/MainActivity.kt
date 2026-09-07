@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AltRoute
 import androidx.compose.material.icons.filled.Cable
 import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.outlined.AltRoute
 import androidx.compose.material.icons.outlined.Cable
 import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.Visibility
@@ -31,6 +33,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.example.ui.ScreenReaderViewModel
+import com.example.ui.screens.ConversationBranchesScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.JsonRecordsScreen
 import com.example.ui.screens.McpServerScreen
@@ -42,9 +45,10 @@ enum class MainDestination(
     val unselectedIcon: ImageVector,
     val testTag: String
 ) {
-    HOME("Lecteur & Scroll", Icons.Filled.Visibility, Icons.Outlined.Visibility, "nav_home"),
-    RECORDS("Fichiers JSON", Icons.Filled.DataObject, Icons.Outlined.DataObject, "nav_records"),
-    MCP("Protocole MCP", Icons.Filled.Cable, Icons.Outlined.Cable, "nav_mcp")
+    HOME("Lecteur", Icons.Filled.Visibility, Icons.Outlined.Visibility, "nav_home"),
+    BRANCHES("Branches Git", Icons.Filled.AltRoute, Icons.Outlined.AltRoute, "nav_branches"),
+    RECORDS("JSON", Icons.Filled.DataObject, Icons.Outlined.DataObject, "nav_records"),
+    MCP("Serveur MCP", Icons.Filled.Cable, Icons.Outlined.Cable, "nav_mcp")
 }
 
 class MainActivity : ComponentActivity() {
@@ -100,6 +104,10 @@ fun MainAppScreen(viewModel: ScreenReaderViewModel) {
     ) { innerPadding ->
         when (destinations[currentDestinationIndex]) {
             MainDestination.HOME -> HomeScreen(
+                viewModel = viewModel,
+                modifier = Modifier.padding(innerPadding)
+            )
+            MainDestination.BRANCHES -> ConversationBranchesScreen(
                 viewModel = viewModel,
                 modifier = Modifier.padding(innerPadding)
             )
