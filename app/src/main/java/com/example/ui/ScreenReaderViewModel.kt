@@ -30,6 +30,7 @@ class ScreenReaderViewModel(application: Application) : AndroidViewModel(applica
     private val mcpEngine = app.mcpEngine
 
     val isAccessibilityEnabled: StateFlow<Boolean> = ScreenReaderAccessibilityService.isServiceActive
+    val isFloatingOverlayVisible: StateFlow<Boolean> = ScreenReaderAccessibilityService.isFloatingOverlayVisible
 
     val recentCaptures: StateFlow<List<ScreenCaptureEntity>> = repository.allCaptures
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -203,29 +204,18 @@ class ScreenReaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun toggleFloatingService(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:${context.packageName}")
-            ).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(intent)
-            Toast.makeText(context, "Autorisez la superposition d'écran pour activer le bouton flottant", Toast.LENGTH_LONG).show()
+        val service = ScreenReaderAccessibilityService.instance
+        if (service == null) {
+            Toast.makeText(
+                context,
+                "Veuillez d'abord activer le service d'accessibilité dans les paramètres Android.",
+                Toast.LENGTH_LONG
+            ).show()
+            openAccessibilitySettings(context)
             return
         }
 
-        val intent = Intent(context, FloatingControlService::class.java)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-            Toast.makeText(context, "Bouton flottant activé !", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Erreur lancement bouton: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
+        service.toggleFloatingOverlay()
     }
 
     fun shareJson(context: Context, jsonContent: String, title: String) {

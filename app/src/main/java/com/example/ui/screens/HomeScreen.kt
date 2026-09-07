@@ -87,6 +87,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val isAccessibilityEnabled by viewModel.isAccessibilityEnabled.collectAsStateWithLifecycle()
+    val isFloatingVisible by viewModel.isFloatingOverlayVisible.collectAsStateWithLifecycle()
     val isReading by viewModel.isReading.collectAsStateWithLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
     val currentDump by viewModel.currentDump.collectAsStateWithLifecycle()
@@ -275,19 +276,31 @@ fun HomeScreen(
                             .height(52.dp)
                             .testTag("floating_button_toggle"),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryCyan)
-                    ) {
-                        Icon(Icons.Default.TouchApp, contentDescription = null, tint = Color.Black)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Activer Bouton Flottant (Scroller & Lire)",
-                            fontWeight = FontWeight.Bold,
-                            color = Color.Black
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isFloatingVisible) AccentSuccess else PrimaryCyan
                         )
+                    ) {
+                        if (isFloatingVisible) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.Black)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "✓ Bouton Flottant Actif (Toucher pour fermer)",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black
+                            )
+                        } else {
+                            Icon(Icons.Default.TouchApp, contentDescription = null, tint = Color.Black)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Afficher Bouton Flottant (Scroller & Lire)",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black
+                            )
+                        }
                     }
 
                     Text(
-                        text = "💡 Le bouton « Scroller & Lire » est accessible directement dans le widget flottant pour faire défiler et capturer vos autres applications (WhatsApp, Chrome, Twitter, etc.).",
+                        text = "💡 Le widget flottant s'affiche par-dessus toutes vos autres applications (WhatsApp, Chrome, Twitter...). Le bouton « ▼ Scroller & Lire » y défile et lit automatiquement sans fermer ni interrompre le service !",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
