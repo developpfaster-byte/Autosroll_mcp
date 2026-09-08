@@ -8,8 +8,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ScreenCaptureDao {
-    // Select lightweight columns for list flows to prevent SQLite CursorWindow (2MB) overflow
-    @Query("SELECT id, timestamp, appPackage, appName, windowTitle, captureType, scrollPasses, extractedTextCount, summaryText, '' AS jsonPayload FROM screen_captures ORDER BY timestamp DESC")
+    @Query("SELECT * FROM screen_captures ORDER BY timestamp DESC")
     fun getAllCaptures(): Flow<List<ScreenCaptureEntity>>
 
     @Query("SELECT * FROM screen_captures WHERE id = :id LIMIT 1")

@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -26,6 +28,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ScreenReaderViewModel(application: Application) : AndroidViewModel(application) {
@@ -70,12 +74,118 @@ class ScreenReaderViewModel(application: Application) : AndroidViewModel(applica
     private val _selectedSnapshotForView = MutableStateFlow<ScreenCaptureEntity?>(null)
     val selectedSnapshotForView: StateFlow<ScreenCaptureEntity?> = _selectedSnapshotForView.asStateFlow()
 
+    init {
+        // Automatically sync dumps captured from the floating overlay button into the home screen
+        viewModelScope.launch {
+            ScreenReaderAccessibilityService.lastCapturedDump.collect { dump ->
+                if (dump != null) {
+                    _currentDump.value = dump
+                }
+            }
+        }
+
+        // On initial startup, hydrate with the latest capture if available
+        viewModelScope.launch {
+            if (_currentDump.value == null) {
+                val latest = ScreenReaderAccessibilityService.lastCapturedDump.value
+                if (latest != null) {
+                    _currentDump.value = latest
+                } else {
+                    val dbLatest = repository.getLatestCapture()
+                    if (dbLatest != null && dbLatest.jsonPayload.isNotBlank()) {
+                        _currentDump.value = ScreenDump.fromJson(dbLatest.jsonPayload)
+                    }
+                }
+            }
+        }
+    }
+
     fun updateConsoleInput(newInput: String) {
         _jsonRpcConsoleInput.value = newInput
     }
 
     fun selectSnapshotForView(entity: ScreenCaptureEntity?) {
-        _selectedSnapshotForView.value = entity
+        if (entity == null) {
+            _selectedSnapshotForView.value = null
+            return
+        }
+
+        val formattedPayload = formatJsonIfPossible(entity.jsonPayload, entity)
+        _selectedSnapshotForView.value = entity.copy(jsonPayload = formattedPayload)
+
+        // If entity had an empty payload in memory, load full record from database
+        if (entity.jsonPayload.isBlank()) {
+            viewModelScope.launch {
+                val full = repository.getCaptureById(entity.id)
+                if (full != null && full.jsonPayload.isNotBlank()) {
+                    _selectedSnapshotForView.value = full.copy(
+                        jsonPayload = formatJsonIfPossible(full.jsonPayload, full)
+                    )
+                }
+            }
+        }
+    }
+
+    fun copyCaptureJson(entity: ScreenCaptureEntity, context: Context) {
+        viewModelScope.launch {
+            var raw = entity.jsonPayload
+            if (raw.isBlank()) {
+                val full = repository.getCaptureById(entity.id)
+                raw = full?.jsonPayload ?: ""
+            }
+            val formatted = formatJsonIfPossible(raw, entity)
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Screen Dump JSON #${entity.id}", formatted))
+            Toast.makeText(context, "✓ JSON copié (${entity.extractedTextCount} textes) !", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun shareCaptureJson(entity: ScreenCaptureEntity, context: Context) {
+        viewModelScope.launch {
+            var raw = entity.jsonPayload
+            if (raw.isBlank()) {
+                val full = repository.getCaptureById(entity.id)
+                raw = full?.jsonPayload ?: ""
+            }
+            val formatted = formatJsonIfPossible(raw, entity)
+            shareJson(context, formatted, "Screen Dump JSON #${entity.id} - ${entity.appName}")
+        }
+    }
+
+    fun formatJsonIfPossible(rawJson: String, fallbackEntity: ScreenCaptureEntity? = null): String {
+        val trimmed = rawJson.trim()
+        if (trimmed.isNotBlank()) {
+            try {
+                if (trimmed.startsWith("{")) {
+                    return JSONObject(trimmed).toString(2)
+                } else if (trimmed.startsWith("[")) {
+                    return JSONArray(trimmed).toString(2)
+                }
+            } catch (e: Exception) {
+                return rawJson
+            }
+        }
+
+        // Reconstruct valid MCP JSON if payload was stored blank
+        if (fallbackEntity != null) {
+            val json = JSONObject()
+            json.put("protocol", "MCP-Screen-Dump-1.0")
+            json.put("id", fallbackEntity.id)
+            json.put("timestamp", fallbackEntity.timestamp)
+            json.put("formattedTime", fallbackEntity.formattedTimestamp)
+            json.put("packageName", fallbackEntity.appPackage)
+            json.put("appName", fallbackEntity.appName)
+            json.put("windowTitle", fallbackEntity.windowTitle)
+            json.put("captureType", fallbackEntity.captureType)
+            json.put("scrollPasses", fallbackEntity.scrollPasses)
+            json.put("extractedTextCount", fallbackEntity.extractedTextCount)
+            val texts = JSONArray()
+            fallbackEntity.summaryText.split(" • ").filter { it.isNotBlank() }.forEach { texts.put(it) }
+            json.put("extractedTexts", texts)
+            return json.toString(2)
+        }
+
+        return "{}"
     }
 
     fun triggerReadScreen() {

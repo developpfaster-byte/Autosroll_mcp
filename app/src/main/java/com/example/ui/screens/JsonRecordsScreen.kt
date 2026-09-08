@@ -192,10 +192,10 @@ fun JsonRecordsScreen(
                         capture = capture,
                         onClick = { viewModel.selectSnapshotForView(capture) },
                         onCopy = {
-                            clipboardManager.setText(AnnotatedString(capture.jsonPayload))
+                            viewModel.copyCaptureJson(capture, context)
                         },
                         onShare = {
-                            viewModel.shareJson(context, capture.jsonPayload, "Screen Dump JSON #${capture.id}")
+                            viewModel.shareCaptureJson(capture, context)
                         },
                         onDelete = { viewModel.deleteCapture(capture.id) }
                     )
@@ -256,7 +256,7 @@ fun JsonRecordsScreen(
                     ) {
                         Button(
                             onClick = {
-                                clipboardManager.setText(AnnotatedString(snapshot.jsonPayload))
+                                viewModel.copyCaptureJson(snapshot, context)
                             },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(8.dp),
@@ -269,7 +269,7 @@ fun JsonRecordsScreen(
 
                         Button(
                             onClick = {
-                                viewModel.shareJson(context, snapshot.jsonPayload, "Screen Dump #${snapshot.id}")
+                                viewModel.shareCaptureJson(snapshot, context)
                             },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(8.dp),
@@ -298,7 +298,7 @@ fun JsonRecordsScreen(
                                 .verticalScroll(rememberScrollState())
                         ) {
                             Text(
-                                text = snapshot.jsonPayload,
+                                text = if (snapshot.jsonPayload.isNotBlank()) snapshot.jsonPayload else "Chargement du contenu JSON...",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 12.sp,
                                 color = Color(0xFFA5F3FC)
