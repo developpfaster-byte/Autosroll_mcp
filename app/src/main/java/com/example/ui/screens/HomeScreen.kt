@@ -44,6 +44,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -53,8 +54,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -411,8 +414,48 @@ fun HomeScreen(
                                         modifier = Modifier.padding(16.dp)
                                     )
                                 } else {
-                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        dump.extractedTexts.forEachIndexed { index, text ->
+                                    var textQuery by remember { mutableStateOf("") }
+                                    var visibleLimit by remember(dump) { mutableIntStateOf(60) }
+
+                                    val filteredTexts = remember(dump.extractedTexts, textQuery) {
+                                        if (textQuery.isBlank()) {
+                                            dump.extractedTexts
+                                        } else {
+                                            dump.extractedTexts.filter { it.contains(textQuery, ignoreCase = true) }
+                                        }
+                                    }
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        // Header tools: Search bar + Copier tout
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            OutlinedTextField(
+                                                value = textQuery,
+                                                onValueChange = { textQuery = it },
+                                                placeholder = { Text("Filtrer parmi ${dump.extractedTexts.size} textes...") },
+                                                modifier = Modifier.weight(1f),
+                                                singleLine = true,
+                                                shape = RoundedCornerShape(10.dp)
+                                            )
+                                            Button(
+                                                onClick = {
+                                                    val allText = dump.extractedTexts.joinToString("\n\n")
+                                                    clipboardManager.setText(AnnotatedString(allText))
+                                                    Toast.makeText(context, "${dump.extractedTexts.size} textes copiés !", Toast.LENGTH_SHORT).show()
+                                                },
+                                                shape = RoundedCornerShape(10.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryCyan)
+                                            ) {
+                                                Text("Copier tout", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            }
+                                        }
+
+                                        // Render windowed slice of items for 0 memory bloat and smooth 60fps scrolling
+                                        val itemsToDisplay = filteredTexts.take(visibleLimit)
+                                        itemsToDisplay.forEachIndexed { index, text ->
                                             Surface(
                                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                                                 shape = RoundedCornerShape(8.dp),
@@ -433,6 +476,35 @@ fun HomeScreen(
                                                         text = text,
                                                         style = MaterialTheme.typography.bodyMedium
                                                     )
+                                                }
+                                            }
+                                        }
+
+                                        // Pagination and expansion controls
+                                        if (filteredTexts.size > visibleLimit) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Affichage de $visibleLimit sur ${filteredTexts.size} textes",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    OutlinedButton(
+                                                        onClick = { visibleLimit += 100 },
+                                                        shape = RoundedCornerShape(8.dp)
+                                                    ) {
+                                                        Text("+100 de plus", fontSize = 12.sp)
+                                                    }
+                                                    Button(
+                                                        onClick = { visibleLimit = filteredTexts.size },
+                                                        shape = RoundedCornerShape(8.dp)
+                                                    ) {
+                                                        Text("Tout afficher", fontSize = 12.sp)
+                                                    }
                                                 }
                                             }
                                         }
@@ -493,6 +565,14 @@ fun HomeScreen(
                                 }
                             }
                             2 -> {
+                                val fullJson = remember(dump) { dump.toFormattedJsonString(2) }
+                                val displayPreview = remember(fullJson) {
+                                    if (fullJson.length > 25000) {
+                                        fullJson.take(25000) + "\n\n... [Aperçu optimisé pour la fluidité (Total: ${fullJson.length} caractères). Utilisez 'Copier JSON' pour exporter l'intégralité]"
+                                    } else {
+                                        fullJson
+                                    }
+                                }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -501,7 +581,7 @@ fun HomeScreen(
                                         .padding(12.dp)
                                 ) {
                                     Text(
-                                        text = dump.toFormattedJsonString(2),
+                                        text = displayPreview,
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 11.sp,
                                         color = Color(0xFFA5F3FC)

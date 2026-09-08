@@ -11,6 +11,8 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.text.TextUtils
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
@@ -141,7 +143,7 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
         }
 
         var nodeCounter = 0
-        fun parseNode(node: AccessibilityNodeInfo, path: String): UiNode {
+        fun parseNode(node: AccessibilityNodeInfo, path: String, depth: Int = 0): UiNode {
             nodeCounter++
             val rect = Rect()
             node.getBoundsInScreen(rect)
@@ -152,10 +154,12 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
             val className = node.className?.toString() ?: ""
 
             val childList = mutableListOf<UiNode>()
-            for (i in 0 until node.childCount) {
-                val child = try { node.getChild(i) } catch (e: Exception) { null }
-                if (child != null) {
-                    childList.add(parseNode(child, "$path/$i"))
+            if (depth < 30) {
+                for (i in 0 until node.childCount) {
+                    val child = try { node.getChild(i) } catch (e: Exception) { null }
+                    if (child != null) {
+                        childList.add(parseNode(child, "$path/$i", depth + 1))
+                    }
                 }
             }
 
@@ -351,7 +355,11 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
             extractedTexts = finalStitched.stitchedLines,
             captureType = "conversation_turn"
         )
-        app?.repository?.saveCapture(dumpResult)
+        try {
+            app?.repository?.saveCapture(dumpResult)
+        } catch (e: Throwable) {
+            Log.e(TAG, "Error saving dump capture", e)
+        }
         _lastCapturedDump.value = dumpResult
 
         return Pair(dumpResult, turnEntity)
@@ -450,7 +458,8 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
     }
 
     fun showFloatingOverlay() {
-        if (floatingOverlayView != null) return
+        // Clean up any existing overlay view first to prevent 'view already added' errors
+        hideFloatingOverlay()
 
         try {
             windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -729,7 +738,17 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
                 hideFloatingOverlay()
             }
 
-            windowManager?.addView(container, params)
+            try {
+                windowManager?.addView(container, params)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed adding with TYPE_ACCESSIBILITY_OVERLAY: ${e.message}, trying fallback", e)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Settings.canDrawOverlays(this)) {
+                    params.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    windowManager?.addView(container, params)
+                } else {
+                    throw e
+                }
+            }
             floatingOverlayView = container
             _isFloatingOverlayVisible.value = true
             Toast.makeText(this, "Bouton flottant activé. Déplacez-vous sur une autre app !", Toast.LENGTH_SHORT).show()
@@ -741,8 +760,12 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
 
     fun hideFloatingOverlay() {
         try {
-            floatingOverlayView?.let {
-                windowManager?.removeView(it)
+            floatingOverlayView?.let { view ->
+                try {
+                    windowManager?.removeViewImmediate(view)
+                } catch (e: Exception) {
+                    windowManager?.removeView(view)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Error removing floating overlay", e)
@@ -891,5 +914,31 @@ class ScreenReaderAccessibilityService : AccessibilityService() {
 
         private val _lastCapturedDump = MutableStateFlow<ScreenDump?>(null)
         val lastCapturedDump: StateFlow<ScreenDump?> = _lastCapturedDump.asStateFlow()
+
+        /**
+         * Checks if this service is enabled in Android Accessibility settings,
+         * helping distinguish between an unconfigured service vs a service awaiting restart.
+         */
+        fun isConfiguredInSettings(context: Context): Boolean {
+            return try {
+                val enabledServices = Settings.Secure.getString(
+                    context.contentResolver,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                ) ?: return false
+                val colonSplitter = TextUtils.SimpleStringSplitter(':')
+                colonSplitter.setString(enabledServices)
+                while (colonSplitter.hasNext()) {
+                    val componentName = colonSplitter.next()
+                    if (componentName.contains(context.packageName, ignoreCase = true) &&
+                        componentName.contains("ScreenReaderAccessibilityService", ignoreCase = true)
+                    ) {
+                        return true
+                    }
+                }
+                false
+            } catch (e: Exception) {
+                false
+            }
+        }
     }
 }

@@ -283,11 +283,20 @@ class ScreenReaderViewModel(application: Application) : AndroidViewModel(applica
     fun toggleFloatingService(context: Context) {
         val service = ScreenReaderAccessibilityService.instance
         if (service == null) {
-            Toast.makeText(
-                context,
-                "Veuillez d'abord activer le service d'accessibilité dans les paramètres Android.",
-                Toast.LENGTH_LONG
-            ).show()
+            val isConfigured = ScreenReaderAccessibilityService.isConfiguredInSettings(context)
+            if (isConfigured) {
+                Toast.makeText(
+                    context,
+                    "Service en attente de reconnexion. Veuillez désactiver puis réactiver le service dans les Paramètres.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    "Veuillez d'abord activer le service d'accessibilité dans les paramètres Android.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
             openAccessibilitySettings(context)
             return
         }

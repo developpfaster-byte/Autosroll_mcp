@@ -35,7 +35,36 @@ data class ScreenDump(
         return toJson().toString(indentSpaces)
     }
 
-    fun toJson(): JSONObject {
+    /**
+     * Compact, bounded JSON representation for safe SQLite database persistence.
+     * Preserves 100% of extracted texts and interactive elements without bloating with deep empty UI node trees.
+     */
+    fun toSafeStorageJsonString(): String {
+        // If there are hundreds of nodes, serialize without inflating massive empty container trees
+        val json = toJson(includeFullHierarchy = totalNodes < 300)
+        return json.toString()
+    }
+
+    /**
+     * Minimal fallback JSON containing all texts and metadata.
+     */
+    fun toMinimalJsonString(): String {
+        val json = JSONObject()
+        json.put("protocol", "MCP-Screen-Dump-1.0")
+        json.put("timestamp", timestamp)
+        json.put("packageName", packageName)
+        json.put("appName", appName)
+        json.put("windowTitle", windowTitle)
+        json.put("captureType", captureType)
+        json.put("scrollPasses", scrollPasses)
+        json.put("totalNodes", totalNodes)
+        val textArray = JSONArray()
+        extractedTexts.forEach { textArray.put(it) }
+        json.put("extractedTexts", textArray)
+        return json.toString()
+    }
+
+    fun toJson(includeFullHierarchy: Boolean = true): JSONObject {
         val json = JSONObject()
         json.put("protocol", "MCP-Screen-Dump-1.0")
         json.put("timestamp", timestamp)
@@ -55,7 +84,7 @@ data class ScreenDump(
         interactiveElements.forEach { elementsArray.put(it.toJson()) }
         json.put("interactiveElements", elementsArray)
 
-        if (rootNode != null) {
+        if (includeFullHierarchy && rootNode != null) {
             json.put("uiHierarchy", rootNode.toJson())
         }
 

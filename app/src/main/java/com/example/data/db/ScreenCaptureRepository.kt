@@ -30,18 +30,39 @@ class ScreenCaptureRepository(
     suspend fun getLatestCapture(): ScreenCaptureEntity? = dao.getLatestCapture()
 
     suspend fun saveCapture(dump: ScreenDump): Long {
-        val entity = ScreenCaptureEntity(
-            timestamp = dump.timestamp,
-            appPackage = dump.packageName,
-            appName = dump.appName,
-            windowTitle = dump.windowTitle,
-            captureType = dump.captureType,
-            scrollPasses = dump.scrollPasses,
-            extractedTextCount = dump.extractedTexts.size,
-            summaryText = dump.summary,
-            jsonPayload = dump.toFormattedJsonString(2)
-        )
-        return dao.insertCapture(entity)
+        return try {
+            val payload = dump.toSafeStorageJsonString()
+            val entity = ScreenCaptureEntity(
+                timestamp = dump.timestamp,
+                appPackage = dump.packageName,
+                appName = dump.appName,
+                windowTitle = dump.windowTitle,
+                captureType = dump.captureType,
+                scrollPasses = dump.scrollPasses,
+                extractedTextCount = dump.extractedTexts.size,
+                summaryText = dump.summary,
+                jsonPayload = payload
+            )
+            dao.insertCapture(entity)
+        } catch (e: Exception) {
+            try {
+                val fallbackPayload = dump.toMinimalJsonString()
+                val fallbackEntity = ScreenCaptureEntity(
+                    timestamp = dump.timestamp,
+                    appPackage = dump.packageName,
+                    appName = dump.appName,
+                    windowTitle = dump.windowTitle,
+                    captureType = dump.captureType,
+                    scrollPasses = dump.scrollPasses,
+                    extractedTextCount = dump.extractedTexts.size,
+                    summaryText = dump.summary,
+                    jsonPayload = fallbackPayload
+                )
+                dao.insertCapture(fallbackEntity)
+            } catch (fallbackError: Exception) {
+                -1L
+            }
+        }
     }
 
     suspend fun deleteById(id: Long) = dao.deleteById(id)
